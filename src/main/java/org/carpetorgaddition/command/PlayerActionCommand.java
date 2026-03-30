@@ -15,8 +15,10 @@ import net.minecraft.command.argument.*;
 import net.minecraft.command.argument.ItemPredicateArgumentType.ItemStackPredicateArgument;
 import net.minecraft.entity.Entity;
 import net.minecraft.item.Item;
-import net.minecraft.screen.ScreenHandlerContext;
-import net.minecraft.screen.SimpleNamedScreenHandlerFactory;
+import net.minecraft.item.ItemStack;
+import net.minecraft.screen.*;
+import net.minecraft.screen.slot.Slot;
+import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -25,10 +27,12 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import org.carpetorgaddition.CarpetOrgAddition;
 import org.carpetorgaddition.CarpetOrgAdditionSettings;
+import org.carpetorgaddition.periodic.fakeplayer.FakePlayerUtils;
 import org.carpetorgaddition.periodic.fakeplayer.action.*;
 import org.carpetorgaddition.periodic.fakeplayer.action.bedrock.BedrockRegionType;
 import org.carpetorgaddition.util.CommandUtils;
 import org.carpetorgaddition.util.FetcherUtils;
+import org.carpetorgaddition.util.InventoryUtils;
 import org.carpetorgaddition.util.MessageUtils;
 import org.carpetorgaddition.wheel.TextBuilder;
 import org.carpetorgaddition.wheel.permission.CommandPermission;
@@ -38,7 +42,9 @@ import org.carpetorgaddition.wheel.predicate.ItemStackPredicate;
 import org.carpetorgaddition.wheel.screen.CraftingSetRecipeScreenHandler;
 import org.carpetorgaddition.wheel.screen.StonecutterSetRecipeScreenHandler;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.function.Function;
@@ -64,6 +70,15 @@ public class PlayerActionCommand extends AbstractServerCommand {
                                 .executes(context -> setEmptyTheContainer(context, true))
                                 .then(CommandManager.argument("filter", ItemPredicateArgumentType.itemPredicate(this.access))
                                         .executes(context -> setEmptyTheContainer(context, false))))
+                        .then(CommandManager.literal("count")
+                            .executes(context -> countContainerItems(context, true))
+                            .then(CommandManager.argument("filter", ItemPredicateArgumentType.itemPredicate(this.access))
+                                .executes(context -> countContainerItems(context, false))))
+                        .then(CommandManager.literal("emptyCount")
+                            .then(CommandManager.argument("count", IntegerArgumentType.integer(1))
+                                .executes(context -> transferOutOfContainer(context, true))
+                                .then(CommandManager.argument("filter", ItemPredicateArgumentType.itemPredicate(this.access))
+                                    .executes(context -> transferOutOfContainer(context, false)))))
                         .then(CommandManager.literal("fill")
                                 .executes(context -> setFillTheContainer(context, true, true, false))
                                 .then(CommandManager.argument("filter", ItemPredicateArgumentType.itemPredicate(this.access))
@@ -72,6 +87,15 @@ public class PlayerActionCommand extends AbstractServerCommand {
                                                 .executes(context -> setFillTheContainer(context, false, BoolArgumentType.getBool(context, FillTheContainerAction.DROP_OTHER), false))
                                                 .then(CommandManager.argument(FillTheContainerAction.MORE_CONTAINER, BoolArgumentType.bool())
                                                         .executes(context -> setFillTheContainer(context, false, BoolArgumentType.getBool(context, FillTheContainerAction.DROP_OTHER), BoolArgumentType.getBool(context, FillTheContainerAction.MORE_CONTAINER)))))))
+                        .then(CommandManager.literal("fillCount")
+                            .then(CommandManager.argument("count", IntegerArgumentType.integer(1))
+                                .executes(context -> transferIntoContainer(context, true, true, false))
+                                .then(CommandManager.argument("filter", ItemPredicateArgumentType.itemPredicate(this.access))
+                                    .executes(context -> transferIntoContainer(context, false, true, false))
+                                    .then(CommandManager.argument(FillTheContainerAction.DROP_OTHER, BoolArgumentType.bool())
+                                        .executes(context -> transferIntoContainer(context, false, BoolArgumentType.getBool(context, FillTheContainerAction.DROP_OTHER), false))
+                                        .then(CommandManager.argument(FillTheContainerAction.MORE_CONTAINER, BoolArgumentType.bool())
+                                            .executes(context -> transferIntoContainer(context, false, BoolArgumentType.getBool(context, FillTheContainerAction.DROP_OTHER), BoolArgumentType.getBool(context, FillTheContainerAction.MORE_CONTAINER))))))))
                         .then(CommandManager.literal("stop")
                                 .executes(this::setStop))
                         .then(CommandManager.literal("craft")
@@ -219,6 +243,227 @@ public class PlayerActionCommand extends AbstractServerCommand {
         ItemStackPredicate predicate = allItem ? ItemStackPredicate.WILDCARD : new ItemStackPredicate(context, "filter");
         actionManager.setAction(new FillTheContainerAction(fakePlayer, predicate, dropOther, moreContainer));
         return 1;
+    }
+
+    // 统计容器中的物品数量，返回匹配物品的总个数
+    private int countContainerItems(CommandContext<ServerCommandSource> context, boolean allItem) throws CommandSyntaxException {
+        EntityPlayerMPFake fakePlayer = CommandUtils.getArgumentFakePlayer(context);
+        ScreenHandler screenHandler = fakePlayer.currentScreenHandler;
+        if (screenHandler == null || screenHandler instanceof PlayerScreenHandler) {
+            return 0;
+        }
+        ItemStackPredicate predicate = allItem ? ItemStackPredicate.WILDCARD : new ItemStackPredicate(context, "filter");
+        int count = 0;
+        for (int slotIndex : getContainerSlotRange(screenHandler)) {
+            ItemStack itemStack = screenHandler.getSlot(slotIndex).getStack();
+            if (itemStack.isEmpty() || InventoryUtils.isGcaItem(itemStack)) {
+                continue;
+            }
+            if (predicate.test(itemStack)) {
+                count += itemStack.getCount();
+            }
+        }
+        return count;
+    }
+
+    // 立即从容器取出指定数量的物品，返回实际取出的数量
+    private int transferOutOfContainer(CommandContext<ServerCommandSource> context, boolean allItem) throws CommandSyntaxException {
+        EntityPlayerMPFake fakePlayer = CommandUtils.getArgumentFakePlayer(context);
+        ScreenHandler screenHandler = fakePlayer.currentScreenHandler;
+        if (screenHandler == null || screenHandler instanceof PlayerScreenHandler) {
+            return 0;
+        }
+        ItemStackPredicate predicate = allItem ? ItemStackPredicate.WILDCARD : new ItemStackPredicate(context, "filter");
+        int count = IntegerArgumentType.getInteger(context, "count");
+        int moved = 0;
+        dropCursorStack(screenHandler, fakePlayer);
+        for (int slotIndex : getContainerSlotRange(screenHandler)) {
+            Slot slot = screenHandler.getSlot(slotIndex);
+            if (!slot.canTakeItems(fakePlayer)) {
+                continue;
+            }
+            while (moved < count) {
+                ItemStack current = slot.getStack();
+                if (current.isEmpty() || InventoryUtils.isGcaItem(current) || !predicate.test(current)) {
+                    break;
+                }
+                screenHandler.onSlotClick(slotIndex, FakePlayerUtils.THROW_Q, SlotActionType.THROW, fakePlayer);
+                moved++;
+            }
+            if (moved >= count) {
+                break;
+            }
+        }
+        dropCursorStack(screenHandler, fakePlayer);
+        return moved;
+    }
+
+    // 立即向容器填充指定数量的物品，返回实际填充的数量
+    private int transferIntoContainer(CommandContext<ServerCommandSource> context, boolean allItem, boolean dropOther, boolean moreContainer) throws CommandSyntaxException {
+        EntityPlayerMPFake fakePlayer = CommandUtils.getArgumentFakePlayer(context);
+        ScreenHandler screenHandler = fakePlayer.currentScreenHandler;
+        if (screenHandler == null || screenHandler instanceof PlayerScreenHandler) {
+            return 0;
+        }
+        ItemStackPredicate predicate = allItem ? ItemStackPredicate.WILDCARD : new ItemStackPredicate(context, "filter");
+        int count = IntegerArgumentType.getInteger(context, "count");
+        int moved = 0;
+        List<Integer> sourceSlots = getPlayerInventorySlotRange(screenHandler);
+        List<Integer> targetSlots = getFillTargetSlotRange(screenHandler, moreContainer);
+        if (targetSlots.isEmpty()) {
+            return 0;
+        }
+        dropCursorStack(screenHandler, fakePlayer);
+        for (int fromIndex : sourceSlots) {
+            if (moved >= count) {
+                break;
+            }
+            Slot fromSlot = screenHandler.getSlot(fromIndex);
+            ItemStack sourceStack = fromSlot.getStack();
+            if (sourceStack.isEmpty() || InventoryUtils.isGcaItem(sourceStack)) {
+                continue;
+            }
+            if (!predicate.test(sourceStack)) {
+                if (dropOther && fromSlot.canTakeItems(fakePlayer)) {
+                    FakePlayerUtils.throwItem(screenHandler, fromIndex, fakePlayer);
+                }
+                continue;
+            }
+            if (screenHandler instanceof ShulkerBoxScreenHandler && !sourceStack.getItem().canBeNested()) {
+                if (dropOther && fromSlot.canTakeItems(fakePlayer)) {
+                    FakePlayerUtils.throwItem(screenHandler, fromIndex, fakePlayer);
+                }
+                continue;
+            }
+            while (moved < count) {
+                ItemStack current = fromSlot.getStack();
+                if (current.isEmpty() || !predicate.test(current)) {
+                    break;
+                }
+                int toIndex = findInsertableSlot(screenHandler, targetSlots, current);
+                if (toIndex < 0 || !moveOneItem(screenHandler, fromIndex, toIndex, fakePlayer)) {
+                    dropCursorStack(screenHandler, fakePlayer);
+                    return moved;
+                }
+                moved++;
+            }
+        }
+        dropCursorStack(screenHandler, fakePlayer);
+        return moved;
+    }
+
+    private static void dropCursorStack(ScreenHandler screenHandler, EntityPlayerMPFake fakePlayer) {
+        if (!screenHandler.getCursorStack().isEmpty()) {
+            screenHandler.onSlotClick(FakePlayerUtils.EMPTY_SPACE_SLOT_INDEX, FakePlayerUtils.PICKUP_LEFT_CLICK, SlotActionType.PICKUP, fakePlayer);
+        }
+    }
+
+    private List<Integer> getContainerSlotRange(ScreenHandler screenHandler) {
+        List<Integer> result = new ArrayList<>();
+        for (int i = 0; i < screenHandler.slots.size(); i++) {
+            if (screenHandler.getSlot(i).inventory instanceof net.minecraft.entity.player.PlayerInventory) {
+                break;
+            }
+            result.add(i);
+        }
+        return result;
+    }
+
+    private List<Integer> getPlayerInventorySlotRange(ScreenHandler screenHandler) {
+        List<Integer> result = new ArrayList<>();
+        for (int i = 0; i < screenHandler.slots.size(); i++) {
+            if (screenHandler.getSlot(i).inventory instanceof net.minecraft.entity.player.PlayerInventory) {
+                result.add(i);
+            }
+        }
+        return result;
+    }
+
+    private List<Integer> getFillTargetSlotRange(ScreenHandler screenHandler, boolean moreContainer) {
+        ArrayList<Integer> list = new ArrayList<>();
+        if (screenHandler instanceof ShulkerBoxScreenHandler) {
+            for (int i = 0; i <= 26; i++) {
+                list.add(i);
+            }
+            if (!moreContainer) {
+                return list;
+            }
+        }
+        if (!moreContainer) {
+            return list;
+        }
+        switch (screenHandler) {
+            case GenericContainerScreenHandler handler when handler.getType() == ScreenHandlerType.GENERIC_9X3 -> {
+                for (int i = 0; i <= 26; i++) {
+                    list.add(i);
+                }
+            }
+            case GenericContainerScreenHandler handler when handler.getType() == ScreenHandlerType.GENERIC_9X6 -> {
+                for (int i = 0; i <= 53; i++) {
+                    list.add(i);
+                }
+            }
+            case HopperScreenHandler ignored -> {
+                for (int i = 0; i <= 4; i++) {
+                    list.add(i);
+                }
+            }
+            case Generic3x3ContainerScreenHandler ignored -> {
+                for (int i = 0; i <= 8; i++) {
+                    list.add(i);
+                }
+            }
+            case CrafterScreenHandler ignored -> {
+                for (int i = 0; i <= 8; i++) {
+                    list.add(i);
+                }
+            }
+            default -> {
+            }
+        }
+        return list;
+    }
+
+    private int findInsertableSlot(ScreenHandler screenHandler, List<Integer> targetSlots, ItemStack sourceStack) {
+        for (int index : targetSlots) {
+            Slot slot = screenHandler.getSlot(index);
+            ItemStack targetStack = slot.getStack();
+            if (targetStack.isEmpty() && slot.canInsert(sourceStack)) {
+                return index;
+            }
+        }
+        for (int index : targetSlots) {
+            Slot slot = screenHandler.getSlot(index);
+            ItemStack targetStack = slot.getStack();
+            if (targetStack.isEmpty()) {
+                continue;
+            }
+            if (ItemStack.areItemsAndComponentsEqual(targetStack, sourceStack)
+                    && targetStack.getCount() < targetStack.getMaxCount()
+                    && slot.canInsert(sourceStack)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private boolean moveOneItem(ScreenHandler screenHandler, int fromIndex, int toIndex, EntityPlayerMPFake fakePlayer) {
+        Slot fromSlot = screenHandler.getSlot(fromIndex);
+        ItemStack before = fromSlot.getStack();
+        if (before.isEmpty() || !fromSlot.canTakeItems(fakePlayer)) {
+            return false;
+        }
+        screenHandler.onSlotClick(fromIndex, FakePlayerUtils.PICKUP_LEFT_CLICK, SlotActionType.PICKUP, fakePlayer);
+        ItemStack cursor = screenHandler.getCursorStack();
+        if (cursor.isEmpty()) {
+            return false;
+        }
+        int cursorCount = cursor.getCount();
+        screenHandler.onSlotClick(toIndex, FakePlayerUtils.PICKUP_RIGHT_CLICK, SlotActionType.PICKUP, fakePlayer);
+        int cursorAfter = screenHandler.getCursorStack().getCount();
+        boolean moved = cursorAfter == cursorCount - 1;
+        screenHandler.onSlotClick(fromIndex, FakePlayerUtils.PICKUP_LEFT_CLICK, SlotActionType.PICKUP, fakePlayer);
+        return moved;
     }
 
     // 单个物品合成

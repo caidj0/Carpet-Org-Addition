@@ -3,7 +3,9 @@
 ## 语法
 
 - `playerAction <player> ...`：具体效果见下文
+    - `... count [<filter>]`
     - `... empty [<filter>]`
+    - `... emptyCount <count> [<filter>]`
     - `... craft ...`
         - `... inventory <item1> <item2> <item3> <item4>`
         - `... crafting_table <item1> <item2> <item3> <item4> <item5> <item6> <item7> <item8> <item9>`
@@ -12,6 +14,7 @@
         - `... nine <item>`
         - `... one <item>`
     - `... fill [<filter>] [<dropOther>]`
+    - `... fillCount <count> [<filter>] [<dropOther>] [<moreContainer>]`
     - `... info`
     - `... rename <item> <name>`
     - `... sorting <item> <this> <other>`
@@ -24,9 +27,17 @@
 ## 效果
 
 - `/playerAction <player> ...`
+    - `count [<filter>]`
+        - 统计假玩家当前打开容器中的物品数量，并将结果作为命令返回值
+        - 不会设置持续动作，适合在数据包函数中通过`execute store result`读取结果
+        - 如果指定`filter`参数，则只统计匹配的物品
     - `empty [<filter>]`
         - 让假玩家自动清空容器，需要让假玩家打开容器，清空完毕后自动关闭容器
         - 如果指定的`filter`参数，则只清空指定的物品
+    - `emptyCount <count> [<filter>]`
+        - 立即从当前容器中取出指定数量的物品（逐个丢出），并返回实际取出的数量
+        - 不会设置持续动作，适合在数据包函数中通过`execute store result`读取结果
+        - 如果指定`filter`参数，则只会取出匹配的物品
     - `craft ...`
         - `inventory <item1> <item2> <item3> <item4>`
             - 让假玩家在生存模式物品栏合成指定配方的物品
@@ -54,6 +65,10 @@
             - 通用3*3容器，例如发射器，投掷器
             - 漏斗
             - 合成器
+    - `fillCount <count> [<filter>] [<dropOther>] [<moreContainer>]`
+        - 立即向当前容器填充指定数量的物品（逐个放入），并返回实际填充数量
+        - 不会设置持续动作，适合在数据包函数中通过`execute store result`读取结果
+        - `dropOther`和`moreContainer`参数行为与`fill`一致
     - `info`
         - 在聊天栏显示假玩家当前动作的详细信息
     - `rename <item> <name>`
