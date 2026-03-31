@@ -96,6 +96,15 @@ public class PlayerActionCommand extends AbstractServerCommand {
                                         .executes(context -> transferIntoContainer(context, false, BoolArgumentType.getBool(context, FillTheContainerAction.DROP_OTHER), false))
                                         .then(CommandManager.argument(FillTheContainerAction.MORE_CONTAINER, BoolArgumentType.bool())
                                             .executes(context -> transferIntoContainer(context, false, BoolArgumentType.getBool(context, FillTheContainerAction.DROP_OTHER), BoolArgumentType.getBool(context, FillTheContainerAction.MORE_CONTAINER))))))))
+                        .then(CommandManager.literal("fetch")
+                            .executes(context -> fetchFromContainer(context, true))
+                            .then(CommandManager.argument("filter", ItemPredicateArgumentType.itemPredicate(this.access))
+                                .executes(context -> fetchFromContainer(context, false))))
+                        .then(CommandManager.literal("fetchCount")
+                            .then(CommandManager.argument("count", IntegerArgumentType.integer(1))
+                                .executes(context -> fetchCountFromContainer(context, true))
+                                .then(CommandManager.argument("filter", ItemPredicateArgumentType.itemPredicate(this.access))
+                                    .executes(context -> fetchCountFromContainer(context, false)))))
                         .then(CommandManager.literal("stop")
                                 .executes(this::setStop))
                         .then(CommandManager.literal("craft")
@@ -463,6 +472,71 @@ public class PlayerActionCommand extends AbstractServerCommand {
         int cursorAfter = screenHandler.getCursorStack().getCount();
         boolean moved = cursorAfter == cursorCount - 1;
         screenHandler.onSlotClick(fromIndex, FakePlayerUtils.PICKUP_LEFT_CLICK, SlotActionType.PICKUP, fakePlayer);
+        return moved;
+    }
+
+    // 从容器取物品放入背包，返回1
+    private int fetchFromContainer(CommandContext<ServerCommandSource> context, boolean allItem) throws CommandSyntaxException {
+        EntityPlayerMPFake fakePlayer = CommandUtils.getArgumentFakePlayer(context);
+        ScreenHandler screenHandler = fakePlayer.currentScreenHandler;
+        if (screenHandler == null || screenHandler instanceof PlayerScreenHandler) {
+            return 0;
+        }
+        ItemStackPredicate predicate = allItem ? ItemStackPredicate.WILDCARD : new ItemStackPredicate(context, "filter");
+        for (int slotIndex : getContainerSlotRange(screenHandler)) {
+            Slot slot = screenHandler.getSlot(slotIndex);
+            if (!slot.canTakeItems(fakePlayer)) {
+                continue;
+            }
+            ItemStack current = slot.getStack();
+            if (!current.isEmpty() && !InventoryUtils.isGcaItem(current) && predicate.test(current)) {
+                screenHandler.onSlotClick(slotIndex, FakePlayerUtils.PICKUP_LEFT_CLICK, SlotActionType.PICKUP, fakePlayer);
+                ItemStack cursor = screenHandler.getCursorStack();
+                if (!cursor.isEmpty()) {
+                    FakePlayerUtils.quickMove(screenHandler, slotIndex, fakePlayer);
+                }
+            }
+        }
+        return 1;
+    }
+
+    // 从容器取指定数量物品放入背包，返回实际转移数量
+    private int fetchCountFromContainer(CommandContext<ServerCommandSource> context, boolean allItem) throws CommandSyntaxException {
+        EntityPlayerMPFake fakePlayer = CommandUtils.getArgumentFakePlayer(context);
+        ScreenHandler screenHandler = fakePlayer.currentScreenHandler;
+        if (screenHandler == null || screenHandler instanceof PlayerScreenHandler) {
+            return 0;
+        }
+        ItemStackPredicate predicate = allItem ? ItemStackPredicate.WILDCARD : new ItemStackPredicate(context, "filter");
+        int count = IntegerArgumentType.getInteger(context, "count");
+        int moved = 0;
+        for (int slotIndex : getContainerSlotRange(screenHandler)) {
+            if (moved >= count) {
+                break;
+            }
+            Slot slot = screenHandler.getSlot(slotIndex);
+            if (!slot.canTakeItems(fakePlayer)) {
+                continue;
+            }
+            ItemStack current = slot.getStack();
+            if (current.isEmpty() || InventoryUtils.isGcaItem(current) || !predicate.test(current)) {
+                continue;
+            }
+            int slotCount = current.getCount();
+            if (slotCount + moved <= count) {
+                screenHandler.quickMove(fakePlayer, slot.id);
+                moved += slotCount;
+            } else {
+                int toMove = count - moved;
+                screenHandler.onSlotClick(slotIndex, FakePlayerUtils.PICKUP_LEFT_CLICK, SlotActionType.PICKUP, fakePlayer);
+                for (int i = 0; i < toMove; i++) {
+                    screenHandler.onSlotClick(slotIndex, FakePlayerUtils.PICKUP_RIGHT_CLICK, SlotActionType.PICKUP, fakePlayer);
+                }
+                screenHandler.quickMove(fakePlayer, slot.id);
+                screenHandler.onSlotClick(slotIndex, FakePlayerUtils.PICKUP_LEFT_CLICK, SlotActionType.PICKUP, fakePlayer);
+                moved = count;
+            }
+        }
         return moved;
     }
 

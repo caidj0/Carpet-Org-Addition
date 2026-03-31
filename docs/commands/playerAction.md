@@ -6,6 +6,8 @@
     - `... count [<filter>]`
     - `... empty [<filter>]`
     - `... emptyCount <count> [<filter>]`
+    - `... fetch [<filter>]`
+    - `... fetchCount <count> [<filter>]`
     - `... craft ...`
         - `... inventory <item1> <item2> <item3> <item4>`
         - `... crafting_table <item1> <item2> <item3> <item4> <item5> <item6> <item7> <item8> <item9>`
@@ -36,6 +38,14 @@
         - 如果指定的`filter`参数，则只清空指定的物品
     - `emptyCount <count> [<filter>]`
         - 立即从当前容器中取出指定数量的物品（逐个丢出），并返回实际取出的数量
+        - 不会设置持续动作，适合在数据包函数中通过`execute store result`读取结果
+        - 如果指定`filter`参数，则只会取出匹配的物品
+    - `fetch [<filter>]`
+        - 立即从当前容器中取出物品放入假玩家背包，返回1
+        - 不会丢出物品，物品会存储在背包中
+        - 如果指定`filter`参数，则只会取出匹配的物品
+    - `fetchCount <count> [<filter>]`
+        - 立即从当前容器中取出指定数量的物品放入假玩家背包，并返回实际取出的数量
         - 不会设置持续动作，适合在数据包函数中通过`execute store result`读取结果
         - 如果指定`filter`参数，则只会取出匹配的物品
     - `craft ...`
